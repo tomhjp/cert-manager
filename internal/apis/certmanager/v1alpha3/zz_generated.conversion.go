@@ -1432,6 +1432,7 @@ func autoConvert_v1alpha3_VaultKubernetesAuth_To_certmanager_VaultKubernetesAuth
 	if err := apismetav1.Convert_v1_LocalObjectReference_To_meta_LocalObjectReference(&in.ServiceAccountRef, &out.ServiceAccountRef, s); err != nil {
 		return err
 	}
+	out.Audience = in.Audience
 	out.Role = in.Role
 	return nil
 }
@@ -1449,6 +1450,7 @@ func autoConvert_certmanager_VaultKubernetesAuth_To_v1alpha3_VaultKubernetesAuth
 	if err := apismetav1.Convert_meta_LocalObjectReference_To_v1_LocalObjectReference(&in.ServiceAccountRef, &out.ServiceAccountRef, s); err != nil {
 		return err
 	}
+	out.Audience = in.Audience
 	out.Role = in.Role
 	return nil
 }

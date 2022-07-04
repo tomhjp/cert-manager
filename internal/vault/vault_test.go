@@ -18,6 +18,7 @@ package vault
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -661,7 +662,7 @@ func TestSetToken(t *testing.T) {
 				issuer:        test.issuer,
 			}
 
-			err := v.setToken(test.fakeClient)
+			err := v.setToken(context.Background(), test.fakeClient)
 			if ((test.expectedErr == nil) != (err == nil)) &&
 				test.expectedErr != nil &&
 				test.expectedErr.Error() != err.Error() {

@@ -33,6 +33,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	coretesting "k8s.io/client-go/testing"
 	fakeclock "k8s.io/utils/clock/testing"
@@ -526,7 +527,7 @@ func runTest(t *testing.T, test testT) {
 	vault := NewVault(test.builder.Context).(*Vault)
 
 	if test.fakeVault != nil {
-		vault.vaultClientBuilder = func(ns string, sl corelisters.SecretLister,
+		vault.vaultClientBuilder = func(_ context.Context, ns string, _ kubernetes.Interface, sl corelisters.SecretLister,
 			iss cmapi.GenericIssuer) (internalvault.Interface, error) {
 			return test.fakeVault.New(ns, sl, iss)
 		}

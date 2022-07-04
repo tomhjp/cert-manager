@@ -262,15 +262,20 @@ type VaultKubernetesAuth struct {
 	SecretRef cmmeta.SecretKeySelector `json:"secretRef,omitempty"`
 
 	// A reference to a service account that will be used to request a bound
-	// token (also known as "projected token"). To be able to request a token,
-	// the service account token mounted in the cert-manager's Pod must be bound
-	// to a role containing the following rule:
+	// token (also known as "projected token"). This field should not be set if
+	// secretRef is set. To be able to request a token, cert-manager's
+	// service account must be bound to a role containing the following rule:
 	//
 	//  apiGroups: [""]
 	//  resources: ["serviceaccounts/token"]
+	//  resourceNames: ["<REFERENCED_SERVICE_ACCOUNT_NAME>"]
 	//  verbs: ["create"]
 	// +optional
 	ServiceAccountRef cmmeta.LocalObjectReference `json:"serviceAccountRef,omitempty"`
+
+	// Audience to use when generating tokens for the service account referenced.
+	// Only used when serviceAccountRef is set.
+	Audience string `json:"audience,omitempty"`
 
 	// A required field containing the Vault Role to assume. A Role binds a
 	// Kubernetes ServiceAccount with a set of Vault policies.

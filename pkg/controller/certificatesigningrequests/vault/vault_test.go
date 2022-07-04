@@ -30,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	coretesting "k8s.io/client-go/testing"
 	fakeclock "k8s.io/utils/clock/testing"
@@ -129,7 +130,7 @@ func TestProcessItem(t *testing.T) {
 					Status: corev1.ConditionTrue,
 				}),
 			),
-			clientBuilder: func(_ string, _ corelisters.SecretLister, _ cmapi.GenericIssuer) (internalvault.Interface, error) {
+			clientBuilder: func(_ context.Context, _ string, _ kubernetes.Interface, _ corelisters.SecretLister, _ cmapi.GenericIssuer) (internalvault.Interface, error) {
 				return nil, apierrors.NewNotFound(schema.GroupResource{}, "test-secret")
 			},
 			builder: &testpkg.Builder{
@@ -190,7 +191,7 @@ func TestProcessItem(t *testing.T) {
 					Status: corev1.ConditionTrue,
 				}),
 			),
-			clientBuilder: func(_ string, _ corelisters.SecretLister, _ cmapi.GenericIssuer) (internalvault.Interface, error) {
+			clientBuilder: func(_ context.Context, _ string, _ kubernetes.Interface, _ corelisters.SecretLister, _ cmapi.GenericIssuer) (internalvault.Interface, error) {
 				return nil, errors.New("generic error")
 			},
 			expectedErr: true,
@@ -234,7 +235,7 @@ func TestProcessItem(t *testing.T) {
 					Status: corev1.ConditionTrue,
 				}),
 			),
-			clientBuilder: func(_ string, _ corelisters.SecretLister, _ cmapi.GenericIssuer) (internalvault.Interface, error) {
+			clientBuilder: func(_ context.Context, _ string, _ kubernetes.Interface, _ corelisters.SecretLister, _ cmapi.GenericIssuer) (internalvault.Interface, error) {
 				return fakevault.New(), nil
 			},
 			builder: &testpkg.Builder{
@@ -296,7 +297,7 @@ func TestProcessItem(t *testing.T) {
 					Status: corev1.ConditionTrue,
 				}),
 			),
-			clientBuilder: func(_ string, _ corelisters.SecretLister, _ cmapi.GenericIssuer) (internalvault.Interface, error) {
+			clientBuilder: func(_ context.Context, _ string, _ kubernetes.Interface, _ corelisters.SecretLister, _ cmapi.GenericIssuer) (internalvault.Interface, error) {
 				return fakevault.New().WithSign(nil, nil, errors.New("sign error")), nil
 			},
 			builder: &testpkg.Builder{
@@ -357,7 +358,7 @@ func TestProcessItem(t *testing.T) {
 					Status: corev1.ConditionTrue,
 				}),
 			),
-			clientBuilder: func(_ string, _ corelisters.SecretLister, _ cmapi.GenericIssuer) (internalvault.Interface, error) {
+			clientBuilder: func(_ context.Context, _ string, _ kubernetes.Interface, _ corelisters.SecretLister, _ cmapi.GenericIssuer) (internalvault.Interface, error) {
 				return fakevault.New().WithSign([]byte("signed-cert"), []byte("signing-ca"), nil), nil
 			},
 			builder: &testpkg.Builder{

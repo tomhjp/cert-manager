@@ -25,6 +25,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	vault "github.com/hashicorp/vault/api"
@@ -42,7 +43,7 @@ var _ Interface = &Vault{}
 
 // ClientBuilder is a function type that returns a new Interface.
 // Can be used in tests to create a mock signer of Vault certificate requests.
-type ClientBuilder func(namespace string, kclient kubernetes.Interface, secretsLister corelisters.SecretLister,
+type ClientBuilder func(ctx context.Context, namespace string, kclient kubernetes.Interface, secretsLister corelisters.SecretLister,
 	issuer v1.GenericIssuer) (Interface, error)
 
 // Interface implements various high level functionality related to connecting
@@ -72,6 +73,10 @@ type Vault struct {
 	issuer        v1.GenericIssuer
 	namespace     string
 
+	// m protects concurrent access to tokenCache
+	m          sync.Mutex
+	tokenCache map[string]authenticationv1.TokenRequestStatus
+
 	client Client
 }
 
@@ -79,12 +84,13 @@ type Vault struct {
 // secrets lister.
 // Returned errors may be network failures and should be considered for
 // retrying.
-func New(namespace string, kclient kubernetes.Interface, secretsLister corelisters.SecretLister, issuer v1.GenericIssuer) (Interface, error) {
+func New(ctx context.Context, namespace string, kclient kubernetes.Interface, secretsLister corelisters.SecretLister, issuer v1.GenericIssuer) (Interface, error) {
 	v := &Vault{
 		kclient:       kclient,
 		secretsLister: secretsLister,
 		namespace:     namespace,
 		issuer:        issuer,
+		tokenCache:    make(map[string]authenticationv1.TokenRequestStatus),
 	}
 
 	cfg, err := v.newConfig()
@@ -97,7 +103,7 @@ func New(namespace string, kclient kubernetes.Interface, secretsLister coreliste
 		return nil, fmt.Errorf("error initializing Vault client: %s", err.Error())
 	}
 
-	if err := v.setToken(client); err != nil {
+	if err := v.setToken(ctx, client); err != nil {
 		return nil, err
 	}
 
@@ -151,7 +157,7 @@ func (v *Vault) Sign(csrPEM []byte, duration time.Duration) (cert []byte, ca []b
 	return extractCertificatesFromVaultCertificateSecret(&vaultResult)
 }
 
-func (v *Vault) setToken(client Client) error {
+func (v *Vault) setToken(ctx context.Context, client Client) error {
 	tokenRef := v.issuer.GetSpec().Vault.Auth.TokenSecretRef
 	if tokenRef != nil {
 		token, err := v.tokenRef(tokenRef.Name, v.namespace, tokenRef.Key)
@@ -176,7 +182,7 @@ func (v *Vault) setToken(client Client) error {
 
 	kubernetesAuth := v.issuer.GetSpec().Vault.Auth.Kubernetes
 	if kubernetesAuth != nil {
-		token, err := v.requestTokenWithKubernetesAuth(client, kubernetesAuth)
+		token, err := v.requestTokenWithKubernetesAuth(ctx, client, kubernetesAuth)
 		if err != nil {
 			return fmt.Errorf("error reading Kubernetes service account token from %s: %s", kubernetesAuth.SecretRef.Name, err.Error())
 		}
@@ -300,7 +306,7 @@ func (v *Vault) requestTokenWithAppRoleRef(client Client, appRole *v1.VaultAppRo
 	return token, nil
 }
 
-func (v *Vault) requestTokenWithKubernetesAuth(client Client, kubernetesAuth *v1.VaultKubernetesAuth) (string, error) {
+func (v *Vault) requestTokenWithKubernetesAuth(ctx context.Context, client Client, kubernetesAuth *v1.VaultKubernetesAuth) (string, error) {
 	var jwt string
 	switch {
 	case kubernetesAuth.SecretRef.Name != "":
@@ -322,12 +328,16 @@ func (v *Vault) requestTokenWithKubernetesAuth(client Client, kubernetesAuth *v1
 		jwt = string(keyBytes)
 
 	case kubernetesAuth.ServiceAccountRef.Name != "":
-		tokenrequest, err := createServiceAccountToken(v.kclient, v.issuer.GetNamespace(), kubernetesAuth.ServiceAccountRef.Name, []string{"vault"}, 7200)
+		audience := kubernetesAuth.Audience
+		if audience == "" {
+			audience = "vault"
+		}
+		trStatus, err := v.getOrCreateServiceAccountToken(ctx, v.issuer.GetNamespace(), kubernetesAuth.ServiceAccountRef.Name, audience)
 		if err != nil {
 			return "", fmt.Errorf("while requesting a token for the service account %s/%s: %s", v.issuer.GetNamespace(), kubernetesAuth.ServiceAccountRef.Name, err.Error())
 		}
 
-		jwt = tokenrequest.Status.Token
+		jwt = trStatus.Token
 	default:
 		return "", fmt.Errorf("programmer mistake: both serviceAccountRef.name and tokenRef.name are empty")
 	}
@@ -438,12 +448,33 @@ func (v *Vault) addVaultNamespaceToRequest(request *vault.Request) {
 	}
 }
 
-func createServiceAccountToken(kclient kubernetes.Interface, tokenNS, tokenSA string, aud []string, expirationSeconds int64) (*authenticationv1.TokenRequest, error) {
-	return kclient.CoreV1().ServiceAccounts(tokenNS).CreateToken(context.Background(), tokenSA,
+func (v *Vault) getOrCreateServiceAccountToken(ctx context.Context, tokenNS, tokenSA, aud string) (authenticationv1.TokenRequestStatus, error) {
+	cacheKey := fmt.Sprintf("%s:%s:%s", tokenNS, tokenSA, aud)
+
+	v.m.Lock()
+	defer v.m.Unlock()
+
+	// Only return cached tokens if they have at least a minute of validity left.
+	// Minimum TTL for Kubernetes tokens is 10 minutes, so we'll always use at least
+	// 90% of the valid duration.
+	if trStatus, ok := v.tokenCache[cacheKey]; ok && time.Now().Add(time.Minute).Before(trStatus.ExpirationTimestamp.Time) {
+		return trStatus, nil
+	}
+
+	tokenRequest, err := createServiceAccountToken(ctx, v.kclient, tokenNS, tokenSA, aud)
+	if err != nil {
+		return authenticationv1.TokenRequestStatus{}, err
+	}
+
+	v.tokenCache[cacheKey] = tokenRequest.Status
+	return tokenRequest.Status, nil
+}
+
+func createServiceAccountToken(ctx context.Context, kclient kubernetes.Interface, tokenNS, tokenSA, aud string) (*authenticationv1.TokenRequest, error) {
+	return kclient.CoreV1().ServiceAccounts(tokenNS).CreateToken(ctx, tokenSA,
 		&authenticationv1.TokenRequest{
 			Spec: authenticationv1.TokenRequestSpec{
-				Audiences:         aud,
-				ExpirationSeconds: &expirationSeconds,
+				Audiences: []string{aud},
 			},
 		}, metav1.CreateOptions{})
 }
